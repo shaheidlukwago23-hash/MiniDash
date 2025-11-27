@@ -1,0 +1,323 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Mini Geometry Dash — Play & Download</title>
+<style>
+:root{--bg:#0f1724;--accent:#06b6d4;--panel:#061024;--muted:#94a3b8;}
+*{box-sizing:border-box;font-family:system-ui,-apple-system,Segoe UI,Roboto,"Helvetica Neue",Arial;}
+html,body{height:100%;margin:0;background:linear-gradient(180deg,var(--bg),#07121a);color:#e6eef6}
+.container{max-width:1000px;margin:18px auto;padding:14px;}
+.header{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.title{font-weight:700;letter-spacing:0.6px}
+.controls{display:flex;gap:8px;align-items:center}
+.btn{background:var(--accent);border:none;color:#022;padding:8px 12px;border-radius:8px;font-weight:700;cursor:pointer}
+.small{padding:6px 8px;font-size:14px;border-radius:6px}
+.canvas-wrap{background:rgba(255,255,255,0.02);border-radius:12px;padding:12px;margin-top:12px}
+canvas{display:block;width:100%;height:auto;border-radius:8px;background:linear-gradient(180deg,#071827,#041424);box-shadow:0 8px 30px rgba(2,6,23,0.6)}
+.hud{display:flex;gap:12px;align-items:center;color:var(--muted);margin-top:8px;flex-wrap:wrap}
+.hud .big{font-size:20px;color:#fff;font-weight:700}
+.footer{margin-top:10px;color:var(--muted);font-size:13px}
+.instructions{margin-top:8px;color:var(--muted);font-size:14px}
+.center{display:flex;align-items:center;justify-content:center}
+.overlay{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);background:linear-gradient(180deg,rgba(2,6,23,0.9),rgba(2,6,23,0.85));padding:18px;border-radius:10px;color:#fff;min-width:220px;text-align:center;box-shadow:0 12px 40px rgba(2,6,23,0.6);}
+.smallmuted{color:var(--muted);font-size:13px;margin-top:6px}
+.note{font-size:13px;color:var(--muted);margin-top:8px}
+@media (max-width:640px){.header{flex-direction:column;align-items:flex-start}}
+</style>
+</head>
+<body>
+<div class="container">
+  <div class="header">
+    <div>
+      <div class="title">Mini Geometry Dash</div>
+      <div class="note">A tiny playable Geometry Dash–style game — click/tap or press Space to jump.</div>
+    </div>
+    <div class="controls">
+      <button id="startBtn" class="btn">Start</button>
+      <button id="muteBtn" class="btn small">Mute</button>
+      <button id="downloadBtn" class="btn small">Download ZIP</button>
+    </div>
+  </div>
+
+  <div class="canvas-wrap" style="position:relative;">
+    <canvas id="gameCanvas" width="900" height="360"></canvas>
+
+    <div id="overlay" class="overlay" style="display:block;">
+      <div style="font-size:18px;font-weight:800">Mini Geometry Dash</div>
+      <div class="smallmuted">Tap/click or press Space to jump. Survive as long as you can.</div>
+      <div style="margin-top:12px">
+        <button id="overlayStart" class="btn">Play</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="hud">
+    <div class="big">Score: <span id="score">0</span></div>
+    <div>Best: <span id="best">0</span></div>
+    <div id="speedDisplay">Speed: <span id="speed">0</span></div>
+    <div class="instructions">Controls: Click / Tap / Space / Up arrow to jump. Hold for higher jump.</div>
+  </div>
+
+  <div class="footer">
+    <strong>How to use:</strong> Open the downloaded index.html to play locally, or upload all files to any static host (GitHub Pages works great).
+  </div>
+</div>
+
+<script>
+// Self-contained mini Geometry Dash clone
+(() => {
+  const canvas = document.getElementById('gameCanvas');
+  const ctx = canvas.getContext('2d');
+  const startBtn = document.getElementById('startBtn');
+  const overlay = document.getElementById('overlay');
+  const overlayStart = document.getElementById('overlayStart');
+  const scoreEl = document.getElementById('score');
+  const bestEl = document.getElementById('best');
+  const speedEl = document.getElementById('speed');
+  const muteBtn = document.getElementById('muteBtn');
+  const downloadBtn = document.getElementById('downloadBtn');
+
+  // scaling to fit container while using internal resolution for consistent gameplay
+  function fitCanvas() {
+    const ratio = canvas.width / canvas.height;
+    const cssW = Math.min(document.querySelector('.canvas-wrap').clientWidth - 24, 1000);
+    canvas.style.width = cssW + 'px';
+    canvas.style.height = (cssW / ratio) + 'px';
+  }
+  window.addEventListener('resize', fitCanvas);
+  fitCanvas();
+
+  // audio (tiny beep for jump and hit) using WebAudio
+  const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  let muted = false;
+  function beep(type='jump'){
+    if(muted) return;
+    try{
+      const o = audioCtx.createOscillator();
+      const g = audioCtx.createGain();
+      o.type = type === 'hit' ? 'sawtooth' : 'square';
+      o.frequency.value = type === 'hit' ? 120 : 560;
+      g.gain.value = 0.12;
+      o.connect(g); g.connect(audioCtx.destination);
+      o.start();
+      g.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + (type==='hit'?0.25:0.12));
+      o.stop(audioCtx.currentTime + (type==='hit'?0.25:0.12));
+    } catch(e){}
+  }
+
+  muteBtn.addEventListener('click', () => {
+    muted = !muted;
+    muteBtn.textContent = muted ? 'Unmute' : 'Mute';
+  });
+
+  // game variables
+  const W = canvas.width, H = canvas.height;
+  const groundH = 64;
+  const player = { x: 80, y: H - groundH - 34, w: 34, h: 34, vy: 0, jumpPower: -12, grounded: true };
+  let obstacles = [];
+  let spawnTimer = 0;
+  let spawnInterval = 1200; // ms
+  let lastTime = 0;
+  let running = false;
+  let score = 0;
+  let best = Number(localStorage.getItem('mini_gd_best') || 0);
+  let speedBase = 6;
+  let speed = speedBase;
+  let gameOver = false;
+
+  bestEl.textContent = best;
+
+  function resetGame(){
+    obstacles = [];
+    spawnTimer = 0;
+    player.y = H - groundH - player.h;
+    player.vy = 0;
+    player.grounded = true;
+    score = 0;
+    speedBase = 6;
+    speed = speedBase;
+    gameOver = false;
+    scoreEl.textContent = 0;
+    speedEl.textContent = speed.toFixed(1);
+  }
+
+  function startGame(){
+    resetGame();
+    running = true;
+    lastTime = performance.now();
+    overlay.style.display = 'none';
+    // resume audio context on interaction (browsers require user gesture)
+    if (audioCtx.state === 'suspended') { audioCtx.resume().catch(()=>{}); }
+    requestAnimationFrame(loop);
+  }
+
+  function endGame(){
+    running = false;
+    gameOver = true;
+    if(score > best){ best = Math.floor(score); localStorage.setItem('mini_gd_best', best); bestEl.textContent = best; }
+    overlay.style.display = 'block';
+    overlay.innerHTML = `<div style="font-size:18px;font-weight:800">Game Over</div>
+      <div class="smallmuted">Score: <strong>${Math.floor(score)}</strong></div>
+      <div style="margin-top:12px"><button id="replay" class="btn">Play Again</button></div>`;
+    document.getElementById('replay').addEventListener('click', startGame);
+    beep('hit');
+  }
+
+  function spawnObstacle(){
+    const gap = Math.random() * 60 + 130; // gap between ground obstacle and possible tall obstacle
+    const w = Math.random() * 30 + 30;
+    const h = Math.random() * 60 + 20;
+    const y = Math.random() < 0.6 ? (H - groundH - h) : (H - groundH - h - (Math.random()>0.5?40:0)); // sometimes float
+    obstacles.push({ x: W + 60, y, w, h });
+  }
+
+  function update(dt){
+    // speed increases slowly with score
+    speed = speedBase + Math.floor(score/100) * 0.6 + Math.min(score/1000, 6);
+    speedEl.textContent = speed.toFixed(1);
+
+    // player physics
+    player.vy += 0.6; // gravity
+    player.y += player.vy;
+    if(player.y + player.h >= H - groundH){
+      player.y = H - groundH - player.h;
+      player.vy = 0;
+      player.grounded = true;
+    } else {
+      player.grounded = false;
+    }
+
+    // spawn obstacles
+    spawnTimer += dt;
+    if(spawnTimer > spawnInterval){
+      spawnTimer = 0;
+      spawnInterval = 800 + Math.random()*900 - Math.min(score/2,600);
+      spawnObstacle();
+    }
+
+    // move obstacles
+    for(let i=obstacles.length-1;i>=0;i--){
+      obstacles[i].x -= speed;
+      // remove off-screen
+      if(obstacles[i].x + obstacles[i].w < -20) obstacles.splice(i,1);
+    }
+
+    // scoring
+    score += dt * 0.02 * (1 + speed/10);
+    scoreEl.textContent = Math.floor(score);
+
+    // collision detection
+    for(const ob of obstacles){
+      if(rectsCollide(player.x, player.y, player.w, player.h, ob.x, ob.y, ob.w, ob.h)){
+        endGame();
+        break;
+      }
+    }
+  }
+
+  function rectsCollide(ax,ay,aw,ah,bx,by,bw,bh){
+    return ax < bx + bw && ax + aw > bx && ay < by + bh && ay + ah > by;
+  }
+
+  function draw(){
+    // background
+    ctx.clearRect(0,0,W,H);
+    // parallax sky
+    const grad = ctx.createLinearGradient(0,0,0,H);
+    grad.addColorStop(0,'#071827');
+    grad.addColorStop(1,'#041424');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0,0,W,H);
+
+    // ground
+    ctx.fillStyle = '#081a2a';
+    ctx.fillRect(0,H-groundH,W,groundH);
+    // ground pattern
+    ctx.fillStyle = '#0b2433';
+    for(let i=0;i<20;i++){
+      ctx.fillRect((i*80 + (performance.now()/50)%80)-80, H-groundH+44, 40, 8);
+    }
+
+    // player (square)
+    // color pulses with score
+    const hue = Math.floor((score*3)%360);
+    ctx.fillStyle = `hsl(${hue} 80% 55%)`;
+    ctx.fillRect(player.x, player.y, player.w, player.h);
+    // player outline
+    ctx.strokeStyle = 'rgba(0,0,0,0.25)';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(player.x, player.y, player.w, player.h);
+
+    // obstacles
+    for(const ob of obstacles){
+      ctx.fillStyle = '#ff6363';
+      ctx.fillRect(ob.x, ob.y, ob.w, ob.h);
+      ctx.strokeStyle = 'rgba(0,0,0,0.2)';
+      ctx.strokeRect(ob.x, ob.y, ob.w, ob.h);
+    }
+
+    // score top-left
+    ctx.fillStyle = '#ffffff';
+    ctx.font = '18px system-ui';
+    ctx.fillText('Score: ' + Math.floor(score), 14, 26);
+    ctx.fillText('Best: ' + best, 14, 46);
+  }
+
+  function loop(ts){
+    if(!running) return;
+    const dt = Math.min(40, ts - lastTime);
+    lastTime = ts;
+    update(dt);
+    draw();
+    requestAnimationFrame(loop);
+  }
+
+  // input handling
+  let pressing = false;
+  function doJump(){
+    if(gameOver) return;
+    if(player.grounded || player.vy > -2){
+      player.vy = player.jumpPower;
+      player.grounded = false;
+      beep('jump');
+    }
+  }
+
+  window.addEventListener('keydown', (e) => {
+    if(e.code === 'Space' || e.code === 'ArrowUp' || e.code === 'KeyW'){
+      e.preventDefault();
+      doJump();
+    }
+  });
+  // mouse/touch
+  window.addEventListener('mousedown', (e) => {
+    doJump();
+  });
+  window.addEventListener('touchstart', (e) => {
+    doJump();
+  }, {passive:true});
+
+  // start button handlers
+  startBtn.addEventListener('click', () => {
+    if(!running) startGame();
+  });
+  overlayStart.addEventListener('click', () => startGame());
+
+  // download button - creates a zip blob from the current page files (serverless approach not allowed), instead provide link to included ZIP in the package
+  downloadBtn.addEventListener('click', () => {
+    // open the packaged ZIP (the repository/zip included with this distribution)
+    // On hosted site this will navigate to the zip in the same folder named geometry_dash_clone.zip
+    const url = './geometry_dash_clone.zip';
+    // attempt to open in new tab
+    window.open(url, '_blank');
+  });
+
+  // initialize
+  resetGame();
+  draw();
+})();
+</script>
+</body>
+</html>
